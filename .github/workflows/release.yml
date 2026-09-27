@@ -72,6 +72,15 @@ jobs:
           key: ponwrt-ccache-${{ matrix.target }}-${{ hashFiles('configs/*.config') }}
           restore-keys: |
             ponwrt-ccache-${{ matrix.target }}-
+      - name: Cache Go build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            /home/runner/.cache/go-build
+            /home/runner/go/pkg/mod
+          key: ponwrt-go-${{ matrix.target }}-${{ hashFiles('configs/*.config') }}
+          restore-keys: |
+            ponwrt-go-${{ matrix.target }}-
 
       - name: Install feeds
         run: |
@@ -142,7 +151,9 @@ jobs:
         run: |
           mkdir -p /home/runner/.ccache
           ccache -M 5G
-          ccache -z
+          ccache -o compression=true
+          echo ">>> ccache stats before build (cumulative):"
+          ccache -s || true
 
       - name: Download sources
         run: make download -j"$(nproc)"
