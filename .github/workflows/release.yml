@@ -77,8 +77,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            /home/runner/.cache/go-build
-            /home/runner/go/pkg/mod
+             tmp/go-build
+             dl/go-mod-cache
           key: ponwrt-go-${{ matrix.target }}-${{ hashFiles('configs/*.config') }}
           restore-keys: |
             ponwrt-go-${{ matrix.target }}-
@@ -162,8 +162,6 @@ jobs:
       - name: Build ${{ matrix.target }}
         env:
           CCACHE_DIR: /home/runner/.ccache
-          GOCACHE: /home/runner/.cache/go-build
-          GOPATH: /home/runner/go
         run: make -j"$(nproc)"
 
       - name: Show ccache stats
