@@ -200,10 +200,17 @@ jobs:
           #    所以 package/feeds 下的副本同样要清（feeds/ 是源，package/feeds/ 是安装后的副本）。
           echo ">>> Removing shadowing v2ray-geodata from all feeds except passwall_packages..."
           # 注意：package/feeds/ 下的是 symlink，find 不能加 -type d
-          find feeds package/feeds -name "v2ray-geodata" 2>/dev/null | grep -v "passwall_packages" | while read -r d; do
-            echo ">>> Removing $d"
-            rm -rf "$d"
-          done
+          # 用 mapfile + 显式判断，避免 `find | grep -v` 在【无匹配】时 grep 返回 1
+          # 被 set -o pipefail 判为失败而中断整个步骤。
+          mapfile -t GEO_DATA_DIRS < <(find feeds package/feeds -name "v2ray-geodata" 2>/dev/null | grep -v "passwall_packages" || true)
+          if [ "${#GEO_DATA_DIRS[@]}" -eq 0 ]; then
+            echo ">>> 没有需要移除的 v2ray-geodata 副本。"
+          else
+            for d in "${GEO_DATA_DIRS[@]}"; do
+              echo ">>> Removing $d"
+              rm -rf "$d"
+            done
+          fi
 
           # 4. passwall2 dns-in 补丁：protocol "tunnel" -> "dokodemo-door"
           #    该 bug 在 x64 版实测过，这里只在【确实存在该 bug】时才修补：
@@ -275,10 +282,15 @@ jobs:
           # 7. POST-INSTALL 清理：feeds install 装依赖时会查陈旧索引，
           #    把已删的 packages 版 v2ray-geodata / xray-core 又装回来，这里再清一次
           echo ">>> Removing post-install v2ray-geodata stragglers..."
-          find package/feeds -name "v2ray-geodata" 2>/dev/null | grep -v "passwall_packages" | while read -r d; do
-            echo ">>> Removing straggler $d"
-            rm -rf "$d"
-          done
+          mapfile -t GEO_STRAGGLERS < <(find package/feeds -name "v2ray-geodata" 2>/dev/null | grep -v "passwall_packages" || true)
+          if [ "${#GEO_STRAGGLERS[@]}" -eq 0 ]; then
+            echo ">>> 没有复活出来的 v2ray-geodata 副本。"
+          else
+            for d in "${GEO_STRAGGLERS[@]}"; do
+              echo ">>> Removing straggler $d"
+              rm -rf "$d"
+            done
+          fi
           rm -rf package/feeds/packages/xray-core
 
           # 确保 passwall_packages 的在位（万一 install 跳过，手动建 symlink 兜底）
@@ -288,18 +300,26 @@ jobs:
             ln -s "../../../feeds/passwall_packages/v2ray-geodata" package/feeds/passwall_packages/v2ray-geodata
           fi
 
-          # 8. 校验：v2ray-geodata 只剩 passwall_packages 的那一个
+          # 8. 清掉可能残留的旧构建产物（feed 里同名包先被装过时会有陈旧 build_dir）
+          rm -rf build_dir/target-*/v2ray-geodata build_dir/target-*/xray-core 2>/dev/null || true
+          rm -f staging_dir/target-*/pkginfo/v2ray-geodata.* staging_dir/target-*/pkginfo/xray-core.* 2>/dev/null || true
+
+          # 9. 校验：v2ray-geodata 只剩 passwall_packages 的那一个
           [ -d "package/feeds/passwall_packages/v2ray-geodata" ] \
             || { echo ">>> [ERROR] passwall_packages v2ray-geodata missing!"; exit 1; }
           REMAINING_COUNT=$(find package/feeds -name "v2ray-geodata" 2>/dev/null | wc -l)
           if [ "$REMAINING_COUNT" -ne 1 ]; then
             echo ">>> [ERROR] Expected exactly 1 v2ray-geodata, found $REMAINING_COUNT:"
-            find package/feeds -name "v2ray-geodata" 2>/dev/null
+            find package/feeds -name "v2ray-geodata" 2>/dev/null || true
             exit 1
           fi
           [ -d "package/feeds/passwall_packages/xray-core" ] \
             || { echo ">>> [ERROR] passwall_packages xray-core missing!"; exit 1; }
           echo ">>> v2ray-geodata/xray-core: only passwall_packages version remains."
+          echo ">>> Final v2ray-geodata location(s):"
+          find package/feeds -name "v2ray-geodata" 2>/dev/null || true
+          echo ">>> Final xray-core location(s):"
+          find package/feeds -name "xray-core" 2>/dev/null || true
 
       - name: Verify geodata source
         working-directory: work
