@@ -1,0 +1,413 @@
+# ============================================================================
+# Upstream Release PonWrt
+# ----------------------------------------------------------------------------
+# 用【上游 pbs05/ponwrt 的源码】编译，配置与产物和本仓库现有云编译一致。
+#
+# 源码来源：clone github.com/pbs05/ponwrt，然后覆盖本仓库的定制层：
+#   - configs/an7581.config, configs/an7583.config, configs/release.config
+#   - feeds.conf.default（含 passwall / passwall_packages 两个 feed）
+#
+# geosite/geoip 与 passwall 处理：按 Actions-OpenWrt/diy-part2.sh 的方式做
+#   1) 删除 luci feed 自带的旧 luci-app-passwall2 / luci-app-passwall（防遮挡）
+#   2) 删除 packages feed 的旧 xray-core，让 passwall_packages 版透出来
+#   3) 删除除 passwall_packages 外所有 v2ray-geodata 副本（去遮挡），
+#      并校验最终只剩 passwall_packages 一份
+#      —— 即用 passwall_packages 里的新版 geo 数据（Loyalsoldier 直连源），
+#      而不是 immortalwrt packages feed 里的旧版（v2fly 源）
+#   4) 修补 passwall2 的 dns-in: "tunnel" -> "dokodemo-door"
+#      （x64 版实测遇到的 passwall2 源码 bug；这里只在确实存在该 bug 时才修，
+#        找不到/已修好就跳过，发现异常或修补失败直接报错，绝不带着坏配置出固件）
+#   **不再钉 passwall feed 版本**，直接用上游最新版。
+#   有关键字选项 PASSWALL_FEED_PINS（默认关闭）可恢复钉版行为。
+#
+# 输出（与现有云编译一致）：
+#   - 构建产物 bin/targets/airoha/<target>/*.itb
+#   - GitHub Release：ponwrt-<target>.itb + sha256sums
+#
+# 注意：pbs05/ponwrt 上游自身的 feeds.conf.default 没有 passwall feed，
+# 所以 feeds.conf.default 的覆盖是必须的。
+# ============================================================================
+
+name: Upstream Release PonWrt
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag
+        required: true
+        type: string
+      prerelease:
+        description: Mark as prerelease
+        required: true
+        default: true
+        type: boolean
+      upstream_repo:
+        description: Upstream source repository to build
+        required: false
+        default: pbs05/ponwrt
+        type: string
+      upstream_ref:
+        description: Upstream branch or tag
+        required: false
+        default: master
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: upstream-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: ${{ inputs.upstream_repo || 'pbs05/ponwrt' }}
+  UPSTREAM_REF: ${{ inputs.upstream_ref || 'master' }}
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    environment: release
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - an7581
+          - an7583
+
+    steps:
+      - name: Checkout build repository
+        uses: actions/checkout@v6
+        with:
+          path: source
+
+      - name: Free build space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo apt-get clean
+
+      - name: Install build dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            asciidoc autoconf automake autopoint binutils bison build-essential \
+            bzip2 ccache clang cmake cpio curl device-tree-compiler flex gawk \
+            gettext git g++-multilib gcc-multilib gperf help2man intltool \
+            libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev \
+            libmpfr-dev libncurses-dev libpython3-dev libreadline-dev libssl-dev \
+            libtool libyaml-dev lld llvm ninja-build p7zip-full patch pkgconf \
+            python3 python3-docutils python3-pip python3-ply python3-pyelftools \
+            qemu-utils re2c rsync scons squashfs-tools subversion swig texinfo \
+            uglifyjs unzip wget xmlto xxd zlib1g-dev zstd
+
+      - name: Clone upstream ${{ env.UPSTREAM_REPO }}
+        run: |
+          echo ">>> Cloning ${UPSTREAM_REPO}@${UPSTREAM_REF} ..."
+          if ! git clone --depth=1 --branch "${UPSTREAM_REF}" \
+                "https://github.com/${UPSTREAM_REPO}.git" work; then
+            echo ">>> [警告] 浅克隆失败，改用全量克隆。"
+            rm -rf work
+            git clone --branch "${UPSTREAM_REF}" \
+              "https://github.com/${UPSTREAM_REPO}.git" work
+          fi
+          UPSTREAM_SHA="$(git -C work rev-parse HEAD)"
+          echo ">>> 上游源码 commit: ${UPSTREAM_SHA}"
+          echo "UPSTREAM_SHA=${UPSTREAM_SHA}" >> "$GITHUB_ENV"
+          test -d work/configs \
+            || { echo ">>> [ERROR] 上游源码缺少 configs/ 目录！"; exit 1; }
+          test -f work/scripts/feeds \
+            || { echo ">>> [ERROR] 上游源码缺少 scripts/feeds！"; exit 1; }
+
+      - name: Overlay local configuration
+        run: |
+          # 用本仓库的定制层覆盖上游源码，保证配置与现有云编译一致。
+          # 只覆盖这几个文件，其余（target/package/tools...）全部取上游。
+          cp -f source/configs/an7581.config                work/configs/an7581.config
+          cp -f source/configs/an7583.config                work/configs/an7583.config
+          cp -f source/configs/release.config               work/configs/release.config
+          cp -f source/feeds.conf.default                   work/feeds.conf.default
+          echo ">>> 已覆盖的配置："
+          grep -E '^src-git (passwall2|passwall_packages)' work/feeds.conf.default
+          echo ">>> release.config:"
+          tail -n 5 work/configs/release.config
+
+      - name: Cache downloads
+        uses: actions/cache@v4
+        with:
+          path: work/dl
+          key: ponwrt-upstream-dl-${{ matrix.target }}-${{ hashFiles('source/configs/*.config', 'source/feeds.conf.default') }}
+          restore-keys: |
+            ponwrt-upstream-dl-${{ matrix.target }}-
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: /home/runner/.ccache
+          key: ponwrt-upstream-ccache-${{ matrix.target }}-${{ hashFiles('source/configs/*.config') }}
+          restore-keys: |
+            ponwrt-upstream-ccache-${{ matrix.target }}-
+
+      - name: Cache Go build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            work/tmp/go-build
+            work/dl/go-mod-cache
+          key: ponwrt-upstream-go-${{ matrix.target }}-${{ hashFiles('source/configs/*.config') }}
+          restore-keys: |
+            ponwrt-upstream-go-${{ matrix.target }}-
+
+      - name: Install feeds
+        working-directory: work
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      # ----------------------------------------------------------------------
+      # 对应 Actions-OpenWrt/diy-part2.sh（geosite/geoip 处理 + passwall 修复）
+      # 原文的 "Pin passwall feeds" 已按要求取消：默认直接用上游最新版。
+      # 如需恢复钉版行为，把下面的 PASSWALL_FEED_PINS 改为 '1'
+      # （对应 commit 与 Actions-OpenWrt/diy-part2.sh 保持一致）。
+      # ----------------------------------------------------------------------
+      - name: Apply diy-part2 feed fixes
+        working-directory: work
+        env:
+          PASSWALL_FEED_PINS: '0'
+          PASSWALL2_PIN: ab1e812ec57ac7be0e213532f60ef4c46e76d962
+          PASSWALL_PACKAGES_PIN: c6d4772cea9bec6adc66261be2c3e6679a595250
+        run: |
+          set -euo pipefail
+
+          # 1. luci feed 排序靠前且自带旧 passwall2，删掉防遮挡
+          echo ">>> Removing passwall copies shipped by the luci feed..."
+          rm -rf feeds/luci/applications/luci-app-passwall2 feeds/luci/applications/luci-app-passwall
+          rm -rf package/feeds/luci/luci-app-passwall2 package/feeds/luci/luci-app-passwall
+
+          # 2. 删 packages feed 的旧 xray-core，让 passwall_packages 的新版透出来
+          echo ">>> Removing shadowed xray-core from packages feed..."
+          rm -rf feeds/packages/net/xray-core
+          rm -rf package/feeds/packages/xray-core
+
+          # 3. v2ray-geodata 去遮挡（geosite/geoip 数据来源）
+          #    packages feed 是旧版（v2fly 源），passwall_packages 是带
+          #    Loyalsoldier 直连源的新版；必须把旧副本删干净，否则构建只会用一份，
+          #    而且 luci-app-passwall2 依赖 +v2ray-geoip +v2ray-geosite。
+          #    必须在下方 feeds install 之前删！此处 install -a 已跑过一次，
+          #    所以 package/feeds 下的副本同样要清（feeds/ 是源，package/feeds/ 是安装后的副本）。
+          echo ">>> Removing shadowing v2ray-geodata from all feeds except passwall_packages..."
+          # 注意：package/feeds/ 下的是 symlink，find 不能加 -type d
+          find feeds package/feeds -name "v2ray-geodata" 2>/dev/null | grep -v "passwall_packages" | while read -r d; do
+            echo ">>> Removing $d"
+            rm -rf "$d"
+          done
+
+          # 4. passwall2 dns-in 补丁：protocol "tunnel" -> "dokodemo-door"
+          #    该 bug 在 x64 版实测过，这里只在【确实存在该 bug】时才修补：
+          #      - 文件/块找不到      -> 跳过（警告），不中断构建
+          #      - 已经修好           -> 跳过（幂等）
+          #      - 多个 dns-in 入站块 -> 报错退出（不猜，交给人看）
+          #      - 修补后仍未修好     -> 报错退出（保证不会带着坏配置编出固件）
+          #    注意：全文有 3 处 `protocol = "tunnel"`（xray 的 tunnel 入站协议是合法的），
+          #    只能定位到 dns-in 那个入站块里那一处，绝不能全局替换。
+          UTIL_XRAY=$(find feeds/passwall2 -name "util_xray.lua" 2>/dev/null | head -1 || true)
+          if [ -z "$UTIL_XRAY" ] || [ ! -f "$UTIL_XRAY" ]; then
+            echo ">>> [警告] feeds/passwall2/util_xray.lua 未找到，跳过 dns-in 补丁。"
+          else
+            echo ">>> dns-in patch target: $UTIL_XRAY"
+            # 1) 所有 dns-in 入站块（tag = "dns-in"，两种引号都算）
+            DNSIN_TAGS=$(grep -nE "tag[[:space:]]*=[[:space:]]*[\"']dns-in[\"']" "$UTIL_XRAY" | cut -d: -f1 || true)
+            DNSIN_COUNT=$(printf '%s\n' "$DNSIN_TAGS" | grep -c . || true)
+            if [ "$DNSIN_COUNT" -eq 0 ]; then
+              echo ">>> [警告] 未找到 dns-in 入站块，跳过该补丁。"
+            elif [ "$DNSIN_COUNT" -ne 1 ]; then
+              echo ">>> [ERROR] 找到 $DNSIN_COUNT 个 dns-in 入站块（预期 1 个），请人工确认后再修补："
+              printf '%s\n' "$DNSIN_TAGS"
+              exit 1
+            else
+              DNSIN_LINE="$DNSIN_TAGS"
+              # 2) 该块里尚未出现 dokodemo-door
+              if sed -n "1,${DNSIN_LINE}p" "$UTIL_XRAY" | grep -q "dokodemo-door"; then
+                echo ">>> dns-in 已经修补过，跳过（幂等）。"
+              else
+                # 3) 在块内向上 8 行范围内定位 protocol = "tunnel"（只改第一处）
+                patch_line=""
+                start=$(( DNSIN_LINE - 8 ))
+                [ "$start" -lt 1 ] && start=1
+                for ((n=DNSIN_LINE; n>=start; n--)); do
+                  if sed -n "${n}p" "$UTIL_XRAY" | grep -qE 'protocol[[:space:]]*=[[:space:]]*["'"'"']tunnel["'"'"']'; then
+                    patch_line=$n
+                  fi
+                done
+                if [ -z "$patch_line" ]; then
+                  echo ">>> [警告] dns-in 块附近没有 protocol = \"tunnel\"，上游可能已改结构，跳过。"
+                else
+                  echo ">>> patching line ${patch_line} (dns-in block at line ${DNSIN_LINE})"
+                  sed -i "${patch_line}s/[\"']tunnel[\"']/\"dokodemo-door\"/" "$UTIL_XRAY"
+                  echo ">>> diff:"
+                  sed -n "$(( patch_line - 4 )),$(( patch_line + 4 ))p" "$UTIL_XRAY"
+                  # 4) 验证：patching 后，tag=dns-in 前的 8 行里必须出现 dokodemo-door
+                  sed -n "$(( DNSIN_LINE - 8 )),${DNSIN_LINE}p" "$UTIL_XRAY" \
+                    | grep -q "dokodemo-door" \
+                    || { echo ">>> [ERROR] dns-in protocol patch failed!"; exit 1; }
+                  echo ">>> dns-in protocol patched."
+                fi
+              fi
+            fi
+          fi
+
+          # 5. （可选）钉版 passwall feed，默认关闭
+          if [ "${PASSWALL_FEED_PINS}" = "1" ]; then
+            echo ">>> Pinning passwall feeds..."
+            git -C feeds/passwall2 checkout -q "${PASSWALL2_PIN}" || { echo ">>> [ERROR] passwall2 pin failed!"; exit 1; }
+            git -C feeds/passwall_packages checkout -q "${PASSWALL_PACKAGES_PIN}" || { echo ">>> [ERROR] passwall_packages pin failed!"; exit 1; }
+          else
+            echo ">>> Using latest passwall feeds (no pin)."
+          fi
+
+          # 6. 重装这两个 feed，让上面的修改生效
+          ./scripts/feeds install -f -a -p passwall2
+          ./scripts/feeds install -f -a -p passwall_packages
+
+          # 7. POST-INSTALL 清理：feeds install 装依赖时会查陈旧索引，
+          #    把已删的 packages 版 v2ray-geodata / xray-core 又装回来，这里再清一次
+          echo ">>> Removing post-install v2ray-geodata stragglers..."
+          find package/feeds -name "v2ray-geodata" 2>/dev/null | grep -v "passwall_packages" | while read -r d; do
+            echo ">>> Removing straggler $d"
+            rm -rf "$d"
+          done
+          rm -rf package/feeds/packages/xray-core
+
+          # 确保 passwall_packages 的在位（万一 install 跳过，手动建 symlink 兜底）
+          if [ ! -e "package/feeds/passwall_packages/v2ray-geodata" ]; then
+            echo ">>> Manually linking v2ray-geodata from passwall_packages..."
+            mkdir -p package/feeds/passwall_packages
+            ln -s "../../../feeds/passwall_packages/v2ray-geodata" package/feeds/passwall_packages/v2ray-geodata
+          fi
+
+          # 8. 校验：v2ray-geodata 只剩 passwall_packages 的那一个
+          [ -d "package/feeds/passwall_packages/v2ray-geodata" ] \
+            || { echo ">>> [ERROR] passwall_packages v2ray-geodata missing!"; exit 1; }
+          REMAINING_COUNT=$(find package/feeds -name "v2ray-geodata" 2>/dev/null | wc -l)
+          if [ "$REMAINING_COUNT" -ne 1 ]; then
+            echo ">>> [ERROR] Expected exactly 1 v2ray-geodata, found $REMAINING_COUNT:"
+            find package/feeds -name "v2ray-geodata" 2>/dev/null
+            exit 1
+          fi
+          [ -d "package/feeds/passwall_packages/xray-core" ] \
+            || { echo ">>> [ERROR] passwall_packages xray-core missing!"; exit 1; }
+          echo ">>> v2ray-geodata/xray-core: only passwall_packages version remains."
+
+      - name: Verify geodata source
+        working-directory: work
+        run: |
+          # 确认最终使用的 geo 数据来自 passwall_packages（Loyalsoldier 直连源）
+          echo ">>> 仍在包树中的 v2ray-geodata 副本："
+          if [ -d feeds/packages/net/v2ray-geodata ]; then
+            echo ">>> [警告] packages feed 的旧版 v2ray-geodata 仍然存在，数据可能被遮挡！"
+          else
+            echo ">>> packages feed：已移除（去遮挡成功）"
+          fi
+          if [ -f feeds/passwall_packages/v2ray-geodata/Makefile ]; then
+            grep -E 'GEOIP_VER|GEOSITE_VER|URL:=' feeds/passwall_packages/v2ray-geodata/Makefile || true
+          fi
+          echo ">>> luci-app-passwall2 依赖声明："
+          grep -m1 -A4 'LUCI_DEPENDS' feeds/passwall2/luci-app-passwall2/Makefile || true
+
+      - name: Load repository signing key
+        working-directory: work
+        env:
+          PONWRT_APK_PRIVATE_KEY: ${{ secrets.PONWRT_APK_PRIVATE_KEY }}
+        run: |
+          if [ -n "$PONWRT_APK_PRIVATE_KEY" ]; then
+            umask 077
+            printf '%s\n' "$PONWRT_APK_PRIVATE_KEY" > private-key.pem
+            openssl ec -in private-key.pem -pubout -out public-key.pem
+          fi
+
+      - name: Configure ${{ matrix.target }}
+        working-directory: work
+        run: |
+          ./scripts/kconfig.pl + \
+            "configs/${{ matrix.target }}.config" \
+            configs/release.config > .config
+          make defconfig
+
+      - name: Setup ccache
+        run: |
+          mkdir -p /home/runner/.ccache
+          ccache -M 5G
+          ccache -o compression=true
+          echo ">>> ccache stats before build (cumulative):"
+          ccache -s || true
+
+      - name: Download sources
+        working-directory: work
+        run: make download -j"$(nproc)"
+
+      - name: Build ${{ matrix.target }}
+        working-directory: work
+        env:
+          CCACHE_DIR: /home/runner/.ccache
+        run: make -j"$(nproc)"
+
+      - name: Show ccache stats
+        run: ccache -s || true
+
+      - name: Collect itb images
+        working-directory: work
+        run: |
+          mkdir -p ../release
+          cp bin/targets/airoha/${{ matrix.target }}/*.itb ../release/
+          ls -la ../release/
+
+      - name: Upload ${{ matrix.target }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ponwrt-${{ matrix.target }}
+          path: release/*.itb
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Create release
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download firmware archives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ponwrt-*
+          path: release
+          merge-multiple: true
+
+      - name: Create checksums
+        working-directory: release
+        run: sha256sum *.itb > sha256sums
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          args=(
+            "$RELEASE_TAG"
+            release/*.itb
+            release/sha256sums
+            --repo "$GITHUB_REPOSITORY"
+            --target "$GITHUB_SHA"
+            --title "PonWrt $RELEASE_TAG"
+            --generate-notes
+          )
+          if [ "$PRERELEASE" = true ]; then
+            args+=(--prerelease)
+          fi
+          gh release create "${args[@]}"
