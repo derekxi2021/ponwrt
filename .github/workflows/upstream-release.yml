@@ -6,19 +6,18 @@
 # 源码来源：clone github.com/pbs05/ponwrt，然后覆盖本仓库的定制层：
 #   - configs/an7581.config, configs/an7583.config, configs/release.config
 #   - feeds.conf.default（含 passwall / passwall_packages 两个 feed）
+#   - diy.sh（构建定制脚本，拷进源码树后由 "Run diy.sh" 步骤调用一次）
 #
-# geosite/geoip 与 passwall 处理：按 Actions-OpenWrt/diy-part2.sh 的方式做
+# ★ 以后所有定制都改 diy.sh，不要改本 yml ★
+# diy.sh 里目前做的事（顺序与 Actions-OpenWrt/diy-part2.sh 一致）：
 #   1) 删除 luci feed 自带的旧 luci-app-passwall2 / luci-app-passwall（防遮挡）
 #   2) 删除 packages feed 的旧 xray-core，让 passwall_packages 版透出来
-#   3) 删除除 passwall_packages 外所有 v2ray-geodata 副本（去遮挡），
-#      并校验最终只剩 passwall_packages 一份
-#      —— 即用 passwall_packages 里的新版 geo 数据（Loyalsoldier 直连源），
-#      而不是 immortalwrt packages feed 里的旧版（v2fly 源）
-#   4) 修补 passwall2 的 dns-in: "tunnel" -> "dokodemo-door"
-#      （x64 版实测遇到的 passwall2 源码 bug；这里只在确实存在该 bug 时才修，
-#        找不到/已修好就跳过，发现异常或修补失败直接报错，绝不带着坏配置出固件）
-#   **不再钉 passwall feed 版本**，直接用上游最新版。
-#   有关键字选项 PASSWALL_FEED_PINS（默认关闭）可恢复钉版行为。
+#   3) v2ray-geodata 去遮挡：只保留 passwall_packages 一份并校验
+#      —— 即用 passwall_packages 的 geo 数据（Loyalsoldier 直连源），
+#      而不是 immortalwrt packages feed 的旧版（v2fly 源）
+#   4) 修补 passwall2 的 dns-in: protocol "tunnel" -> "dokodemo-door"（幂等、按需）
+#   5) 重装 passwall / passwall_packages 两个 feed（不钉版，用上游最新）
+#   6) POST-INSTALL 再清一次复活出来的旧副本 + 断言校验
 #
 # 输出（与现有云编译一致）：
 #   - 构建产物 bin/targets/airoha/<target>/*.itb
@@ -130,6 +129,9 @@ jobs:
           cp -f source/configs/an7583.config                work/configs/an7583.config
           cp -f source/configs/release.config               work/configs/release.config
           cp -f source/feeds.conf.default                   work/feeds.conf.default
+          # 定制脚本：所有后续改动都写它，不要改本 yml
+          cp -f source/diy.sh                               work/diy.sh
+          chmod +x work/diy.sh
           echo ">>> 已覆盖的配置："
           grep -E '^src-git (passwall2|passwall_packages)' work/feeds.conf.default
           echo ">>> release.config:"
@@ -168,170 +170,27 @@ jobs:
           ./scripts/feeds install -a
 
       # ----------------------------------------------------------------------
-      # 对应 Actions-OpenWrt/diy-part2.sh（geosite/geoip 处理 + passwall 修复）
-      # 原文的 "Pin passwall feeds" 已按要求取消：默认直接用上游最新版。
-      # 如需恢复钉版行为，把下面的 PASSWALL_FEED_PINS 改为 '1'
-      # （对应 commit 与 Actions-OpenWrt/diy-part2.sh 保持一致）。
+      # 所有构建定制都放在仓库根目录的 diy.sh 里，本 yml 保持稳定。
+      # diy.sh 已由上面的 Overlay 步骤拷进源码树，这里只需调用一次。
+      # 以后要改 passwall/geodata/主题/删包等，编辑 diy.sh 即可，不用动 yml。
       # ----------------------------------------------------------------------
-      - name: Apply diy-part2 feed fixes
+      - name: Run diy.sh
         working-directory: work
-        env:
-          PASSWALL_FEED_PINS: '0'
-          PASSWALL2_PIN: ab1e812ec57ac7be0e213532f60ef4c46e76d962
-          PASSWALL_PACKAGES_PIN: c6d4772cea9bec6adc66261be2c3e6679a595250
         run: |
-          set -euo pipefail
-
-          # 1. luci feed 排序靠前且自带旧 passwall2，删掉防遮挡
-          echo ">>> Removing passwall copies shipped by the luci feed..."
-          rm -rf feeds/luci/applications/luci-app-passwall2 feeds/luci/applications/luci-app-passwall
-          rm -rf package/feeds/luci/luci-app-passwall2 package/feeds/luci/luci-app-passwall
-
-          # 2. 删 packages feed 的旧 xray-core，让 passwall_packages 的新版透出来
-          echo ">>> Removing shadowed xray-core from packages feed..."
-          rm -rf feeds/packages/net/xray-core
-          rm -rf package/feeds/packages/xray-core
-
-          # 3. v2ray-geodata 去遮挡（geosite/geoip 数据来源）
-          #    packages feed 是旧版（v2fly 源），passwall_packages 是带
-          #    Loyalsoldier 直连源的新版；必须把旧副本删干净，否则构建只会用一份，
-          #    而且 luci-app-passwall2 依赖 +v2ray-geoip +v2ray-geosite。
-          #    必须在下方 feeds install 之前删！此处 install -a 已跑过一次，
-          #    所以 package/feeds 下的副本同样要清（feeds/ 是源，package/feeds/ 是安装后的副本）。
-          echo ">>> Removing shadowing v2ray-geodata from all feeds except passwall_packages..."
-          # 注意：package/feeds/ 下的是 symlink，find 不能加 -type d
-          # 用 mapfile + 显式判断，避免 `find | grep -v` 在【无匹配】时 grep 返回 1
-          # 被 set -o pipefail 判为失败而中断整个步骤。
-          mapfile -t GEO_DATA_DIRS < <(find feeds package/feeds -name "v2ray-geodata" 2>/dev/null | grep -v "passwall_packages" || true)
-          if [ "${#GEO_DATA_DIRS[@]}" -eq 0 ]; then
-            echo ">>> 没有需要移除的 v2ray-geodata 副本。"
-          else
-            for d in "${GEO_DATA_DIRS[@]}"; do
-              echo ">>> Removing $d"
-              rm -rf "$d"
-            done
-          fi
-
-          # 4. passwall2 dns-in 补丁：protocol "tunnel" -> "dokodemo-door"
-          #    该 bug 在 x64 版实测过，这里只在【确实存在该 bug】时才修补：
-          #      - 文件/块找不到      -> 跳过（警告），不中断构建
-          #      - 已经修好           -> 跳过（幂等）
-          #      - 多个 dns-in 入站块 -> 报错退出（不猜，交给人看）
-          #      - 修补后仍未修好     -> 报错退出（保证不会带着坏配置编出固件）
-          #    注意：全文有 3 处 `protocol = "tunnel"`（xray 的 tunnel 入站协议是合法的），
-          #    只能定位到 dns-in 那个入站块里那一处，绝不能全局替换。
-          UTIL_XRAY=$(find feeds/passwall2 -name "util_xray.lua" 2>/dev/null | head -1 || true)
-          if [ -z "$UTIL_XRAY" ] || [ ! -f "$UTIL_XRAY" ]; then
-            echo ">>> [警告] feeds/passwall2/util_xray.lua 未找到，跳过 dns-in 补丁。"
-          else
-            echo ">>> dns-in patch target: $UTIL_XRAY"
-            # 1) 所有 dns-in 入站块（tag = "dns-in"，两种引号都算）
-            DNSIN_TAGS=$(grep -nE "tag[[:space:]]*=[[:space:]]*[\"']dns-in[\"']" "$UTIL_XRAY" | cut -d: -f1 || true)
-            DNSIN_COUNT=$(printf '%s\n' "$DNSIN_TAGS" | grep -c . || true)
-            if [ "$DNSIN_COUNT" -eq 0 ]; then
-              echo ">>> [警告] 未找到 dns-in 入站块，跳过该补丁。"
-            elif [ "$DNSIN_COUNT" -ne 1 ]; then
-              echo ">>> [ERROR] 找到 $DNSIN_COUNT 个 dns-in 入站块（预期 1 个），请人工确认后再修补："
-              printf '%s\n' "$DNSIN_TAGS"
-              exit 1
-            else
-              DNSIN_LINE="$DNSIN_TAGS"
-              # 2) 该块里尚未出现 dokodemo-door
-              if sed -n "1,${DNSIN_LINE}p" "$UTIL_XRAY" | grep -q "dokodemo-door"; then
-                echo ">>> dns-in 已经修补过，跳过（幂等）。"
-              else
-                # 3) 在块内向上 8 行范围内定位 protocol = "tunnel"（只改第一处）
-                patch_line=""
-                start=$(( DNSIN_LINE - 8 ))
-                [ "$start" -lt 1 ] && start=1
-                for ((n=DNSIN_LINE; n>=start; n--)); do
-                  if sed -n "${n}p" "$UTIL_XRAY" | grep -qE 'protocol[[:space:]]*=[[:space:]]*["'"'"']tunnel["'"'"']'; then
-                    patch_line=$n
-                  fi
-                done
-                if [ -z "$patch_line" ]; then
-                  echo ">>> [警告] dns-in 块附近没有 protocol = \"tunnel\"，上游可能已改结构，跳过。"
-                else
-                  echo ">>> patching line ${patch_line} (dns-in block at line ${DNSIN_LINE})"
-                  sed -i "${patch_line}s/[\"']tunnel[\"']/\"dokodemo-door\"/" "$UTIL_XRAY"
-                  echo ">>> diff:"
-                  sed -n "$(( patch_line - 4 )),$(( patch_line + 4 ))p" "$UTIL_XRAY"
-                  # 4) 验证：patching 后，tag=dns-in 前的 8 行里必须出现 dokodemo-door
-                  sed -n "$(( DNSIN_LINE - 8 )),${DNSIN_LINE}p" "$UTIL_XRAY" \
-                    | grep -q "dokodemo-door" \
-                    || { echo ">>> [ERROR] dns-in protocol patch failed!"; exit 1; }
-                  echo ">>> dns-in protocol patched."
-                fi
-              fi
-            fi
-          fi
-
-          # 5. （可选）钉版 passwall feed，默认关闭
-          if [ "${PASSWALL_FEED_PINS}" = "1" ]; then
-            echo ">>> Pinning passwall feeds..."
-            git -C feeds/passwall2 checkout -q "${PASSWALL2_PIN}" || { echo ">>> [ERROR] passwall2 pin failed!"; exit 1; }
-            git -C feeds/passwall_packages checkout -q "${PASSWALL_PACKAGES_PIN}" || { echo ">>> [ERROR] passwall_packages pin failed!"; exit 1; }
-          else
-            echo ">>> Using latest passwall feeds (no pin)."
-          fi
-
-          # 6. 重装这两个 feed，让上面的修改生效
-          ./scripts/feeds install -f -a -p passwall2
-          ./scripts/feeds install -f -a -p passwall_packages
-
-          # 7. POST-INSTALL 清理：feeds install 装依赖时会查陈旧索引，
-          #    把已删的 packages 版 v2ray-geodata / xray-core 又装回来，这里再清一次
-          echo ">>> Removing post-install v2ray-geodata stragglers..."
-          mapfile -t GEO_STRAGGLERS < <(find package/feeds -name "v2ray-geodata" 2>/dev/null | grep -v "passwall_packages" || true)
-          if [ "${#GEO_STRAGGLERS[@]}" -eq 0 ]; then
-            echo ">>> 没有复活出来的 v2ray-geodata 副本。"
-          else
-            for d in "${GEO_STRAGGLERS[@]}"; do
-              echo ">>> Removing straggler $d"
-              rm -rf "$d"
-            done
-          fi
-          rm -rf package/feeds/packages/xray-core
-
-          # 确保 passwall_packages 的在位（万一 install 跳过，手动建 symlink 兜底）
-          if [ ! -e "package/feeds/passwall_packages/v2ray-geodata" ]; then
-            echo ">>> Manually linking v2ray-geodata from passwall_packages..."
-            mkdir -p package/feeds/passwall_packages
-            ln -s "../../../feeds/passwall_packages/v2ray-geodata" package/feeds/passwall_packages/v2ray-geodata
-          fi
-
-          # 8. 清掉可能残留的旧构建产物（feed 里同名包先被装过时会有陈旧 build_dir）
-          rm -rf build_dir/target-*/v2ray-geodata build_dir/target-*/xray-core 2>/dev/null || true
-          rm -f staging_dir/target-*/pkginfo/v2ray-geodata.* staging_dir/target-*/pkginfo/xray-core.* 2>/dev/null || true
-
-          # 9. 校验：v2ray-geodata 只剩 passwall_packages 的那一个
-          [ -d "package/feeds/passwall_packages/v2ray-geodata" ] \
-            || { echo ">>> [ERROR] passwall_packages v2ray-geodata missing!"; exit 1; }
-          REMAINING_COUNT=$(find package/feeds -name "v2ray-geodata" 2>/dev/null | wc -l)
-          if [ "$REMAINING_COUNT" -ne 1 ]; then
-            echo ">>> [ERROR] Expected exactly 1 v2ray-geodata, found $REMAINING_COUNT:"
-            find package/feeds -name "v2ray-geodata" 2>/dev/null || true
-            exit 1
-          fi
-          [ -d "package/feeds/passwall_packages/xray-core" ] \
-            || { echo ">>> [ERROR] passwall_packages xray-core missing!"; exit 1; }
-          echo ">>> v2ray-geodata/xray-core: only passwall_packages version remains."
-          echo ">>> Final v2ray-geodata location(s):"
-          find package/feeds -name "v2ray-geodata" 2>/dev/null || true
-          echo ">>> Final xray-core location(s):"
-          find package/feeds -name "xray-core" 2>/dev/null || true
+          chmod +x diy.sh
+          ./diy.sh
 
       - name: Verify geodata source
         working-directory: work
         run: |
-          # 确认最终使用的 geo 数据来自 passwall_packages（Loyalsoldier 直连源）
-          echo ">>> 仍在包树中的 v2ray-geodata 副本："
+          # 构建前最后确认一次 geo 数据的来源
           if [ -d feeds/packages/net/v2ray-geodata ]; then
             echo ">>> [警告] packages feed 的旧版 v2ray-geodata 仍然存在，数据可能被遮挡！"
           else
-            echo ">>> packages feed：已移除（去遮挡成功）"
+            echo ">>> packages feed 的旧版 v2ray-geodata 已移除（去遮挡成功）"
           fi
           if [ -f feeds/passwall_packages/v2ray-geodata/Makefile ]; then
+            echo ">>> 生效的 geo 数据来源："
             grep -E 'GEOIP_VER|GEOSITE_VER|URL:=' feeds/passwall_packages/v2ray-geodata/Makefile || true
           fi
           echo ">>> luci-app-passwall2 依赖声明："
