@@ -277,13 +277,17 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
           PRERELEASE: ${{ inputs.prerelease }}
         run: |
+          # upstream 源码构建的 tag 加 upstream- 前缀，与 fork 区分
+          if [[ "$RELEASE_TAG" != upstream-* ]]; then
+            RELEASE_TAG="upstream-$RELEASE_TAG"
+          fi
           args=(
             "$RELEASE_TAG"
             release/*.itb
             release/sha256sums
             --repo "$GITHUB_REPOSITORY"
             --target "$GITHUB_SHA"
-            --title "PonWrt $RELEASE_TAG"
+            --title "PonWrt Upstream $RELEASE_TAG"
             --generate-notes
           )
           if [ "$PRERELEASE" = true ]; then
