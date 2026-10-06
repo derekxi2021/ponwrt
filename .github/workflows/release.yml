@@ -87,33 +87,13 @@ jobs:
         run: |
           ./scripts/feeds update -a
           ./scripts/feeds install -a
-      
-      
-      - name: Update geosite/geoip from Loyalsoldier
+
+      - name: Run diy.sh
         run: |
-          echo ">>> 开始处理 geosite / geoip 规则数据库..."
-          TMP_GEO_DIR="/tmp/geo_rules_tmp"
-          rm -rf "$TMP_GEO_DIR"
-          mkdir -p "$TMP_GEO_DIR"
-          echo ">>> 尝试下载 Loyalsoldier 最新规则..."
-          curl -sSL --connect-timeout 15 -m 30 -o "$TMP_GEO_DIR/geoip.dat" https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat
-          curl -sSL --connect-timeout 15 -m 30 -o "$TMP_GEO_DIR/geosite.dat" https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat
-          GEOIP_SIZE=$(stat -c%s "$TMP_GEO_DIR/geoip.dat" 2>/dev/null || echo 0)
-          GEOSITE_SIZE=$(stat -c%s "$TMP_GEO_DIR/geosite.dat" 2>/dev/null || echo 0)
-          if [ "$GEOIP_SIZE" -gt 1048576 ] && [ "$GEOSITE_SIZE" -gt 1048576 ]; then
-              echo ">>> Loyalsoldier 最新规则拉取成功！开始注入..."
-              mkdir -p files/usr/share/v2ray
-              cp -f "$TMP_GEO_DIR/geoip.dat" files/usr/share/v2ray/
-              cp -f "$TMP_GEO_DIR/geosite.dat" files/usr/share/v2ray/
-              find feeds/ package/ -type f -name "Makefile" -exec grep -l "geodata" {} + 2>/dev/null | while read -r file; do
-                  sed -i 's/$(INSTALL_DATA) .*geoip.dat/echo "Skip geoip.dat"/g' "$file" 2>/dev/null || true
-                  sed -i 's/$(INSTALL_DATA) .*geosite.dat/echo "Skip geosite.dat"/g' "$file" 2>/dev/null || true
-              done
-              echo ">>> 规则替换与 Makefile 防覆盖处理完毕！"
-          else
-              echo ">>> [警告] 最新规则拉取失败或超时，保留源码自带规则！"
-          fi
-          rm -rf "$TMP_GEO_DIR"
+          chmod +x diy.sh
+          ./diy.sh
+      
+      
 
       - name: Load repository signing key
         env:
@@ -206,4 +186,9 @@ jobs:
           if [ "$PRERELEASE" = true ]; then
             args+=(--prerelease)
           fi
+          # 同名 tag 已存在时先删掉，避免 "already exists" 报错
+          gh release delete "$RELEASE_TAG" --yes --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
+          # 同名 git tag 也删掉（release delete 不删 tag）
+          git ls-remote --tags "https://github.com/$GITHUB_REPOSITORY" | grep -q "refs/tags/$RELEASE_TAG$" && \
+            gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$RELEASE_TAG" 2>/dev/null || true
           gh release create "${args[@]}"
