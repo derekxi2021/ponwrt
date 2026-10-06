@@ -88,22 +88,6 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
       
-      - name: Pin passwall feeds
-        run: |
-          # Pin passwall feeds to commits matching x64 build (2026-09-25),
-          # so passwall2 config format stays compatible between AN7581 and x64.
-          # NOTE: feeds.conf.default cannot pin a commit hash directly (the feeds
-          # script treats ";rev" as a branch name), so checkout after feeds update.
-          # `scripts/feeds install -a` already ran, so re-install these two feeds
-          # to pick up the pinned versions.
-          # To upgrade passwall2 later, update both hashes here AND the matching
-          # pins in Actions-OpenWrt/diy-part2.sh together, then rebuild both.
-          echo ">>> Pinning passwall2 feed..."
-          git -C feeds/passwall2 checkout -q ab1e812ec57ac7be0e213532f60ef4c46e76d962 || { echo ">>> [ERROR] passwall2 pin failed!"; exit 1; }
-          git -C feeds/passwall_packages checkout -q c6d4772cea9bec6adc66261be2c3e6679a595250 || { echo ">>> [ERROR] passwall_packages pin failed!"; exit 1; }
-          ./scripts/feeds install -f -a -p passwall2
-          ./scripts/feeds install -f -a -p passwall_packages
-          echo ">>> Passwall feeds pinned."
       
       - name: Update geosite/geoip from Loyalsoldier
         run: |
@@ -206,13 +190,17 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
           PRERELEASE: ${{ inputs.prerelease }}
         run: |
+          # fork 源码构建的 tag 加 fork- 前缀，与 upstream 区分
+          if [[ "$RELEASE_TAG" != fork-* ]]; then
+            RELEASE_TAG="fork-$RELEASE_TAG"
+          fi
           args=(
             "$RELEASE_TAG"
             release/*.itb
             release/sha256sums
             --repo "$GITHUB_REPOSITORY"
             --target "$GITHUB_SHA"
-            --title "PonWrt $RELEASE_TAG"
+            --title "PonWrt Fork $RELEASE_TAG"
             --generate-notes
           )
           if [ "$PRERELEASE" = true ]; then
