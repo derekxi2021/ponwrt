@@ -55,6 +55,16 @@ rm -rf feeds/packages/net/xray-core
 rm -rf package/feeds/packages/xray-core
 
 # ---------------------------------------------------------------------------
+# miniupnpd 2.3.11: 020/030 两个 patch 已合并进上游，删掉冗余的
+# （见 immortalwrt/packages#2000/#2001，2026-10-16）
+# 040 只是日志级别优化，先删掉，等上游刷新
+# ---------------------------------------------------------------------------
+say "Removing redundant miniupnpd patches (already merged in 2.3.11)..."
+rm -f feeds/packages/net/miniupnpd/patches/020-descr-filter-fix.patch
+rm -f feeds/packages/net/miniupnpd/patches/030-allow-private-fix.patch
+rm -f feeds/packages/net/miniupnpd/patches/040-improve-logging.patch
+
+# ---------------------------------------------------------------------------
 # 3. v2ray-geodata 去遮挡
 # ---------------------------------------------------------------------------
 # 必须在下面的 feeds install 之前删：feeds/ 是源，package/feeds/ 是安装后的
