@@ -203,6 +203,29 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# python3 _ctypes 缺 ffi.h（2026-10-28 jzhou 7583 构建失败，pbs05 正常）：
+# python3 用 --with-system-ffi 编译，_ctypes 必须有 staging 里的 ffi.h，
+# 但 feed 的 python3 Makefile 的 PKG_BUILD_DEPENDS 没列 libffi，
+# ffi.h 到不到位全看 .config 有没有别的东西顺带拉 libffi、以及构建顺序。
+# 这里直接把 libffi 加进构建依赖，保证它在 python3 编译前编好并进 staging。
+# 上游以后修了这里会自动跳过（幂等判断）。
+# ---------------------------------------------------------------------------
+say "Ensuring libffi is a build dependency of python3..."
+PY3_MK=$(find feeds/packages -path "*lang/python/python3/Makefile" 2>/dev/null | head -1 || true)
+if [ -z "$PY3_MK" ]; then
+  warn "python3 Makefile 未找到，跳过 libffi 构建依赖补丁。"
+elif grep "^PKG_BUILD_DEPENDS:=" "$PY3_MK" | grep -q "libffi"; then
+  say "python3 PKG_BUILD_DEPENDS 已含 libffi，跳过（幂等）。"
+else
+  sed -i 's/^PKG_BUILD_DEPENDS:=/PKG_BUILD_DEPENDS:=libffi /' "$PY3_MK" || die "Failed to add libffi to python3 PKG_BUILD_DEPENDS in $PY3_MK"
+  if grep "^PKG_BUILD_DEPENDS:=" "$PY3_MK" | grep -q "libffi"; then
+    say "libffi added to python3 PKG_BUILD_DEPENDS in $PY3_MK"
+  else
+    die "Failed to add libffi to python3 PKG_BUILD_DEPENDS in $PY3_MK"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 # 7. 校验
 # ---------------------------------------------------------------------------
 say "Verifying passwall/geodata state..."
