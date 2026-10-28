@@ -174,6 +174,27 @@ rm -rf build_dir/target-*/v2ray-geodata build_dir/target-*/xray-core 2>/dev/null
 rm -f staging_dir/target-*/pkginfo/v2ray-geodata.* staging_dir/target-*/pkginfo/xray-core.* 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
+# PassWall2 GOMEMLIMIT: 438MB 小内存机器，xray 堆无上限会把内存吃光
+# （2026-10-19、2026-10-28 两次 available 跌到 19MB 触发重启）。
+# 把 export 打进 feed 里的 init 脚本，固件自带，刷机后无需再手动补。
+# 插入位置与路由器上现有的第 2 行一致（sed '1a'），刷机前后行为相同。
+# ---------------------------------------------------------------------------
+say "Ensuring GOMEMLIMIT export in passwall2 init script..."
+PW2_INIT=$(find feeds/passwall2 -path '*root/etc/init.d/passwall2' 2>/dev/null | head -1 || true)
+if [ -z "$PW2_INIT" ]; then
+  say "WARNING: passwall2 init script not found, skipping GOMEMLIMIT patch"
+elif grep -q "GOMEMLIMIT" "$PW2_INIT"; then
+  say "GOMEMLIMIT already present in $PW2_INIT, skipping"
+else
+  sed -i '1a export GOMEMLIMIT=100MiB' "$PW2_INIT" || die "Failed to insert GOMEMLIMIT export into $PW2_INIT"
+  if grep -q "GOMEMLIMIT=100MiB" "$PW2_INIT"; then
+    say "GOMEMLIMIT export added to $PW2_INIT"
+  else
+    die "Failed to add GOMEMLIMIT export to $PW2_INIT"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 # 7. 校验
 # ---------------------------------------------------------------------------
 say "Verifying passwall/geodata state..."
