@@ -47,6 +47,14 @@ say "Removing passwall copies shipped by the luci feed..."
 rm -rf feeds/luci/applications/luci-app-passwall2 feeds/luci/applications/luci-app-passwall
 rm -rf package/feeds/luci/luci-app-passwall2 package/feeds/luci/luci-app-passwall
 
+# jzhou 树自带的 feed-patches 里有给 luci-app-passwall 打的补丁，
+# 但上面已把 luci feed 的 luci-app-passwall 删掉（防遮挡 passwall2），
+# 补丁无目标可打，make defconfig 经 prepare-tmpinfo 调 feed-patches-apply 时
+# 会直接失败（2026-10-28 实测）。包都删了，补丁也就没有意义，一并删掉。
+# 注意：只删这一个补丁目录，不动 jzhou 树其他的 feed-patches（如 pon_userspace）。
+say "Removing jzhou feed-patch for deleted luci-app-passwall..."
+rm -rf feed-patches/luci/luci-app-passwall
+
 # ---------------------------------------------------------------------------
 # 2. 删 packages feed 的旧 xray-core，让 passwall_packages 的新版透出来
 # ---------------------------------------------------------------------------
