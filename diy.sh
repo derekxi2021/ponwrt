@@ -207,16 +207,17 @@ fi
 # 不带它；jzhou 树 package/libs/libffi 不存在，pbs05 树有。
 # 于是整个构建树里没有 libffi，python3 的 _ctypes（--with-system-ffi）
 # 找不到 ffi.h 编译失败；给不存在的包加依赖（PKG_BUILD_DEPENDS/DEPENDS）
-# 都是空操作。直接从 pbs05 树把这个包补进来（仅 1 个 Makefile）。
+# 都是空操作。直接从 pbs05 树把这个包补进来（仅 1 个 Makefile，无 patches）。
 # 已存在则跳过：pbs05 侧零变化，同一份 diy.sh 两边通用。
-# svn export（非 checkout）不留 .svn；jzhou-release.yml 的依赖安装里
-# 已含 subversion，runner 上可用。
+# 2026-10-29 实测 svn export 在 trunk 下 path not found（默认分支与 master
+# 不一致），改用 curl 直取 master 上的文件，不走 SVN 桥。
 # ---------------------------------------------------------------------------
 say "Ensuring libffi package exists in tree..."
 if [ -d "package/libs/libffi" ]; then
   say "package/libs/libffi 已存在，跳过（幂等）。"
 else
-  svn export https://github.com/pbs05/ponwrt/trunk/package/libs/libffi package/libs/libffi || die "Failed to export libffi from pbs05 tree"
+  mkdir -p package/libs/libffi || die "Failed to create package/libs/libffi"
+  curl -fsSL https://raw.githubusercontent.com/pbs05/ponwrt/master/package/libs/libffi/Makefile -o package/libs/libffi/Makefile || die "Failed to download libffi Makefile from pbs05 tree"
   if [ -f "package/libs/libffi/Makefile" ]; then
     say "libffi vendored from pbs05 tree:"
     grep -E '^PKG_VERSION|^PKG_RELEASE' package/libs/libffi/Makefile || true
