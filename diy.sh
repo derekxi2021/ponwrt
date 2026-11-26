@@ -302,6 +302,17 @@ else
   warn "$MT76_MK 未找到，跳过更新。"
 fi
 
+# ---------------------------------------------------------------------------
+# 集成温度监控插件 luci-app-temp-status (支持显示 CPU/WiFi/Switch 温度)
+# ---------------------------------------------------------------------------
+say "Cloning luci-app-temp-status..."
+if [ ! -d "package/luci-app-temp-status" ]; then
+  git clone --depth 1 https://github.com/gSpotx2f/luci-app-temp-status.git package/luci-app-temp-status
+  say "luci-app-temp-status cloned successfully."
+else
+  say "package/luci-app-temp-status already exists, skipping."
+fi
+
 # ===========================================================================
 # 以后要加东西，直接往下写即可，例如：
 #
