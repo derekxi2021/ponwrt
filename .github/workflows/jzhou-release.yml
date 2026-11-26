@@ -226,7 +226,9 @@ jobs:
         working-directory: work
         env:
           CCACHE_DIR: /home/runner/.ccache
-        run: make -j"$(nproc)"
+        #run: make -j"$(nproc)"
+        # 开启 QUIET 模式或重定向 warning，只输出当前正在编译哪个包以及关键 Error
+        run: make -j"$(nproc)" BUILD_LOG=1
 
       - name: Show ccache stats
         run: ccache -s || true
