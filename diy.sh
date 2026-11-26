@@ -63,6 +63,22 @@ rm -rf feeds/packages/net/xray-core
 rm -rf package/feeds/packages/xray-core
 
 # ---------------------------------------------------------------------------
+# sing-box 去遮挡与 Go 编译内存保护（解决两周后上游更新导致的编译崩溃）
+# ---------------------------------------------------------------------------
+say "Removing shadowed sing-box from packages feed..."
+rm -rf feeds/packages/net/sing-box
+rm -rf package/feeds/packages/sing-box
+
+say "Optimizing sing-box build flags to prevent memory limit errors..."
+SB_MK="feeds/passwall_packages/sing-box/Makefile"
+if [ -f "$SB_MK" ]; then
+  # 1. 降低 Go GC 触发阈值，避免链接时内存骤增打爆 Actions 容器
+  sed -i 's/PKG_BUILD_PARALLEL:=1/PKG_BUILD_PARALLEL:=0/' "$SB_MK"
+  sed -i 's/^GO_PKG_BUILD_VARS :=/GO_PKG_BUILD_VARS := GOGC=50 /' "$SB_MK" 2>/dev/null || true
+  say "sing-box Makefile patched successfully."
+fi
+
+# ---------------------------------------------------------------------------
 # miniupnpd 2.3.11: 020/030 两个 patch 已合并进上游，删掉冗余的
 # （见 immortalwrt/packages#2000/#2001，2026-10-16）
 # 040 只是日志级别优化，先删掉，等上游刷新
@@ -282,7 +298,7 @@ find package/feeds -name "v2ray-geodata" 2>/dev/null || true
 say "xray-core 最终位置："
 find package/feeds -name "xray-core" 2>/dev/null || true
 
-say "diy.sh 执行完毕。"
+[ -d "package/feeds/passwall_packages/sing-box" ] || die "passwall_packages sing-box missing!"
 
 # ---------------------------------------------------------------------------
 # 更新 mt76 驱动到上游最新版本（解决 MT7915/MT7916 MCU 超时及死锁问题）
@@ -312,6 +328,8 @@ if [ ! -d "package/luci-app-temp-status" ]; then
 else
   say "package/luci-app-temp-status already exists, skipping."
 fi
+
+say "diy.sh 执行完毕。"
 
 # ===========================================================================
 # 以后要加东西，直接往下写即可，例如：
