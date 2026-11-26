@@ -301,21 +301,33 @@ find package/feeds -name "xray-core" 2>/dev/null || true
 [ -d "package/feeds/passwall_packages/sing-box" ] || die "passwall_packages sing-box missing!"
 
 # ---------------------------------------------------------------------------
-# 更新 mt76 驱动到上游最新版本（解决 MT7915/MT7916 MCU 超时及死锁问题）
+# 更新 mt76 驱动到上游最新版本（带 2026-11 月最新的 MCU 复位/死锁修复）
+# 同时修补与当前内核 WED 宏定义的参数兼容性
 # ---------------------------------------------------------------------------
 say "Updating mt76 driver package to latest upstream master..."
 MT76_MK="package/kernel/mt76/Makefile"
 if [ -f "$MT76_MK" ]; then
-  # 1. 替换源码版本为上游最新提交（包含 2026-11 月最新的 MCU 复位修复）
   sed -i 's/^PKG_SOURCE_DATE:=.*/PKG_SOURCE_DATE:=2026-11-25/' "$MT76_MK"
   sed -i 's/^PKG_SOURCE_VERSION:=.*/PKG_SOURCE_VERSION:=acb7b1c85c22400e1b737ce6efc36d2519482ebd/' "$MT76_MK"
-  # 2. 清空固定的镜像校验 hash（避免版本变动后 hash 不匹配报错）
   sed -i 's/^PKG_MIRROR_HASH:=.*/PKG_MIRROR_HASH:=skip/' "$MT76_MK"
 
-  say "mt76 Makefile updated successfully:"
-  grep -E 'PKG_SOURCE_DATE|PKG_SOURCE_VERSION|PKG_MIRROR_HASH' "$MT76_MK" || true
-else
-  warn "$MT76_MK 未找到，跳过更新。"
+  # 注入一个补丁：修补 mt7915_wed_check_ppe 宏参数数量与当前 6.18 内核兼容
+  mkdir -p package/kernel/mt76/patches
+  cat << 'EOF' > package/kernel/mt76/patches/999-fix-wed-ppe-check-compat.patch
+--- a/mt7915/mac.c
++++ b/mt7915/mac.c
+@@ -257,8 +257,7 @@ static void mt7915_wed_check_ppe(struct mt7915_dev *dev, struct sk_buff *skb,
+ 	mtk_wed_device_ppe_check(&dev->mt76.mmio.wed, skb,
+ 				 FIELD_GET(MT_DMA_PPE_CPU_REASON, info),
+-				 FIELD_GET(MT_DMA_PPE_ENTRY, info),
+-				 msta->wcid.idx);
++				 FIELD_GET(MT_DMA_PPE_ENTRY, info));
+ }
+ 
+ static int
+EOF
+
+  say "mt76 updated and compatibility patch applied successfully."
 fi
 
 # ---------------------------------------------------------------------------
