@@ -284,6 +284,24 @@ find package/feeds -name "xray-core" 2>/dev/null || true
 
 say "diy.sh 执行完毕。"
 
+# ---------------------------------------------------------------------------
+# 更新 mt76 驱动到上游最新版本（解决 MT7915/MT7916 MCU 超时及死锁问题）
+# ---------------------------------------------------------------------------
+say "Updating mt76 driver package to latest upstream master..."
+MT76_MK="package/kernel/mt76/Makefile"
+if [ -f "$MT76_MK" ]; then
+  # 1. 替换源码版本为上游最新提交（包含 2026-11 月最新的 MCU 复位修复）
+  sed -i 's/^PKG_SOURCE_DATE:=.*/PKG_SOURCE_DATE:=2026-11-25/' "$MT76_MK"
+  sed -i 's/^PKG_SOURCE_VERSION:=.*/PKG_SOURCE_VERSION:=acb7b1c85c22400e1b737ce6efc36d2519482ebd/' "$MT76_MK"
+  # 2. 清空固定的镜像校验 hash（避免版本变动后 hash 不匹配报错）
+  sed -i 's/^PKG_MIRROR_HASH:=.*/PKG_MIRROR_HASH:=skip/' "$MT76_MK"
+
+  say "mt76 Makefile updated successfully:"
+  grep -E 'PKG_SOURCE_DATE|PKG_SOURCE_VERSION|PKG_MIRROR_HASH' "$MT76_MK" || true
+else
+  warn "$MT76_MK 未找到，跳过更新。"
+fi
+
 # ===========================================================================
 # 以后要加东西，直接往下写即可，例如：
 #
