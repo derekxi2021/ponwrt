@@ -33,8 +33,8 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag
-        required: true
+        description: 'Release tag (留空则按北京时间自动生成)'
+        required: false
         type: string
       prerelease:
         description: Mark as prerelease
@@ -56,7 +56,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: jzhou-release-${{ inputs.tag }}
+  group: jzhou-release-${{ inputs.tag || github.run_id }}
   cancel-in-progress: false
 
 env:
@@ -116,37 +116,32 @@ jobs:
           UPSTREAM_SHA="$(git -C work rev-parse HEAD)"
           echo ">>> 上游源码 commit: ${UPSTREAM_SHA}"
           echo "UPSTREAM_SHA=${UPSTREAM_SHA}" >> "$GITHUB_ENV"
-          test -d work/configs \
-            || { echo ">>> [ERROR] 上游源码缺少 configs/ 目录！"; exit 1; }
-          test -f work/scripts/feeds \
-            || { echo ">>> [ERROR] 上游源码缺少 scripts/feeds！"; exit 1; }
+          test -d work/target/linux/airoha || {
+            echo ">>> [错误] 没有 target/linux/airoha，不是预期的源码仓库！" >&2
+            exit 1
+          }
 
-      - name: Overlay local configuration
+      - name: Overlay our configurations and build script
         run: |
-          # 用本仓库的定制层覆盖上游源码，保证配置与现有云编译一致。
-          # 只覆盖这几个文件，其余（target/package/tools...）全部取上游。
-          cp -f source/configs/an7581.config                work/configs/an7581.config
-          cp -f source/configs/an7583.config                work/configs/an7583.config
-          cp -f source/configs/release.config               work/configs/release.config
-          cp -f source/feeds.conf.default                   work/feeds.conf.default
-          # 定制脚本：所有后续改动都写它，不要改本 yml
-          cp -f source/diy.sh                               work/diy.sh
-          chmod +x work/diy.sh
-          echo ">>> 已覆盖的配置："
-          grep -E '^src-git (passwall2|passwall_packages)' work/feeds.conf.default
-          echo ">>> release.config:"
-          tail -n 5 work/configs/release.config
+          echo ">>> 覆盖配置文件与构建定制脚本..."
+          cp -fv source/configs/an7581.config  work/configs/an7581.config
+          cp -fv source/configs/an7583.config  work/configs/an7583.config
+          cp -fv source/configs/release.config work/configs/release.config
+          cp -fv source/feeds.conf.default     work/feeds.conf.default
+          cp -fv source/diy.sh                 work/diy.sh
+          echo ">>> feeds.conf.default 内容："
+          cat work/feeds.conf.default
 
-      - name: Cache downloads
-        uses: actions/cache@v4
+      - name: Restore downloaded packages cache
+        uses: actions/cache/restore@v4
         with:
           path: work/dl
-          key: ponwrt-jzhou-dl-${{ matrix.target }}-${{ hashFiles('source/configs/*.config', 'source/feeds.conf.default') }}
+          key: ponwrt-jzhou-dl-${{ hashFiles('source/configs/*.config') }}
           restore-keys: |
-            ponwrt-jzhou-dl-${{ matrix.target }}-
+            ponwrt-jzhou-dl-
 
-      - name: Cache ccache
-        uses: actions/cache@v4
+      - name: Restore ccache
+        uses: actions/cache/restore@v4
         with:
           path: /home/runner/.ccache
           key: ponwrt-jzhou-ccache-${{ matrix.target }}-${{ hashFiles('source/configs/*.config') }}
@@ -274,9 +269,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ inputs.tag }}
+          INPUT_TAG: ${{ inputs.tag }}
           PRERELEASE: ${{ inputs.prerelease }}
         run: |
+          # 如果 tag 为空，自动以东八区时间生成年月日-时分（如 20261126-1605）
+          if [ -z "$INPUT_TAG" ]; then
+            RELEASE_TAG="$(TZ=Asia/Shanghai date +'%Y%m%d-%H%M')"
+          else
+            RELEASE_TAG="$INPUT_TAG"
+          fi
+
           # jzhou 源码构建的 tag 加 jzhou- 前缀，与 fork 区分
           if [[ "$RELEASE_TAG" != jzhou-* ]]; then
             RELEASE_TAG="jzhou-$RELEASE_TAG"
