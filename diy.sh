@@ -341,6 +341,37 @@ else
   say "package/luci-app-temp-status already exists, skipping."
 fi
 
+# ----------------------------------------------------
+# 固化无线底层优化（关闭A-MSDU、锁定20dBm安全功率、关闭WED）
+# ----------------------------------------------------
+mkdir -p files/etc/uci-defaults
+cat << 'EOF' > files/etc/uci-defaults/99-custom-wireless-tuning
+#!/bin/sh
+
+# 如果 /etc/config/wireless 尚未生成，先调用系统命令生成
+if [ ! -f /etc/config/wireless ]; then
+    wifi config
+fi
+
+# 优化 5G 射频 (radio1)
+uci -q set wireless.radio1.amsdu='0'
+uci -q set wireless.radio1.txpower='20'
+uci -q set wireless.radio1.wed='0'
+
+# 优化 2.4G 射频 (radio0)
+uci -q set wireless.radio0.amsdu='0'
+uci -q set wireless.radio0.txpower='20'
+uci -q set wireless.radio0.wed='0'
+
+# 确保 5G 和 2.4G 默认 SSID 处于启用状态
+uci -q set wireless.default_radio1.disabled='0'
+uci -q set wireless.default_radio0.disabled='0'
+
+uci commit wireless
+exit 0
+EOF
+chmod +x files/etc/uci-defaults/99-custom-wireless-tuning
+
 say "diy.sh 执行完毕。"
 
 # ===========================================================================
